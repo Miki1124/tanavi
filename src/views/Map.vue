@@ -137,9 +137,9 @@ const updateWalkingMinutes = () => {
   ]);
 
   /*
-    1分で約70m歩くとして計算
+    1分で約20m歩くとして計算
   */
-  walkingMinutes.value = Math.max(1, Math.ceil(distance / 70));
+  walkingMinutes.value = Math.max(1, Math.ceil(distance / 20));
 };
 
 /* 授業中・授業10分前を判定 */
