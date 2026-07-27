@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref, computed } from 'vue';
+import { onMounted, ref, computed } from 'vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { buildings } from '../buildingsData.js';
@@ -26,16 +26,7 @@ const redIcon = new L.Icon({
 
 const keyword = ref('');
 const locationMessage = ref('現在地を確認しています');
-
 const currentClass = ref(null);
-const nextClass = ref(null);
-
-const classCardType = ref(null);
-const showClassCard = ref(true);
-
-const minutesUntilClass = ref(null);
-const walkingMinutes = ref(null);
-const userLocation = ref(null);
 
 const campusCenter = [34.801, 135.771];
 
@@ -57,19 +48,13 @@ const isInsideCampus = (lat, lng) => {
 
 let map;
 let selectedMarker = null;
-let classCheckTimer = null;
-let previousClassCardKey = null;
 
 const buildingMarkers = {};
 
 const filteredBuildings = computed(() => {
-  const trimmedKeyword = keyword.value.trim();
+  if (keyword.value === '') return [];
 
-  if (trimmedKeyword === '') {
-    return [];
-  }
-
-  return buildings.filter((building) => building.name.includes(trimmedKeyword));
+  return buildings.filter((building) => building.name.includes(keyword.value));
 });
 
 /* 授業時間 */
@@ -85,65 +70,11 @@ const classTimes = [
 
 const convertToMinutes = (time) => {
   const [hour, minute] = time.split(':').map(Number);
-
   return hour * 60 + minute;
 };
 
-/* 保存されている時間割を取得 */
-const getSavedTimetable = () => {
-  const savedTimetable = localStorage.getItem('timetable');
-
-  if (!savedTimetable) {
-    return [];
-  }
-
-  try {
-    const timetable = JSON.parse(savedTimetable);
-
-    return Array.isArray(timetable) ? timetable : [];
-  } catch (error) {
-    console.error('時間割データの読み込みに失敗しました', error);
-
-    return [];
-  }
-};
-
-/* カードに表示する授業 */
-const displayedClass = computed(() => {
-  return currentClass.value || nextClass.value;
-});
-
-/* カードに表示する授業の建物 */
-const displayedBuilding = computed(() => {
-  if (!displayedClass.value) {
-    return null;
-  }
-
-  return buildings.find(
-    (building) => building.name === displayedClass.value.building
-  );
-});
-
-/* 現在地から授業の建物までの徒歩時間 */
-const updateWalkingMinutes = () => {
-  if (!map || !userLocation.value || !displayedBuilding.value) {
-    walkingMinutes.value = null;
-    return;
-  }
-
-  const distance = map.distance(userLocation.value, [
-    displayedBuilding.value.lat,
-    displayedBuilding.value.lng,
-  ]);
-
-  /*
-    1分で約20m歩くとして計算
-  */
-  walkingMinutes.value = Math.max(1, Math.ceil(distance / 20));
-};
-
-/* 授業中・授業10分前を判定 */
-const updateClassStatus = () => {
+/* 今の時間の授業を取得 */
+const getCurrentClass = () => {
   const now = new Date();
 
   const dayNames = [
@@ -157,217 +88,68 @@ const updateClassStatus = () => {
   ];
 
   const currentDay = dayNames[now.getDay()];
-
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  const timetable = getSavedTimetable();
-
-  currentClass.value = null;
-  nextClass.value = null;
-  classCardType.value = null;
-  minutesUntilClass.value = null;
-
-  /*
-    現在授業中か確認
-  */
-  const activePeriod = classTimes.find((classTime) => {
+  const currentPeriod = classTimes.find((classTime) => {
     const start = convertToMinutes(classTime.start);
     const end = convertToMinutes(classTime.end);
 
-    return currentMinutes >= start && currentMinutes < end;
+    return currentMinutes >= start && currentMinutes <= end;
   });
 
-  if (activePeriod) {
-    const lesson = timetable.find(
-      (item) =>
-        item.day === currentDay && Number(item.period) === activePeriod.period
+  if (!currentPeriod) return null;
+
+  const savedTimetable = localStorage.getItem('timetable');
+
+  if (!savedTimetable) return null;
+
+  try {
+    const timetable = JSON.parse(savedTimetable);
+
+    return (
+      timetable.find(
+        (item) =>
+          item.day === currentDay &&
+          Number(item.period) === currentPeriod.period
+      ) || null
     );
-
-    if (lesson) {
-      currentClass.value = {
-        ...lesson,
-        start: activePeriod.start,
-        end: activePeriod.end,
-      };
-
-      classCardType.value = 'current';
-    }
+  } catch (error) {
+    console.error('時間割データの読み込みに失敗しました', error);
+    return null;
   }
-
-  /*
-    授業中でなければ、
-    10分以内に始まる授業があるか確認
-  */
-  if (!currentClass.value) {
-    for (const classTime of classTimes) {
-      const start = convertToMinutes(classTime.start);
-
-      const difference = start - currentMinutes;
-
-      if (difference >= 0 && difference <= 10) {
-        const lesson = timetable.find(
-          (item) =>
-            item.day === currentDay && Number(item.period) === classTime.period
-        );
-
-        if (lesson) {
-          nextClass.value = {
-            ...lesson,
-            start: classTime.start,
-            end: classTime.end,
-          };
-
-          classCardType.value = 'next';
-          minutesUntilClass.value = difference;
-
-          break;
-        }
-      }
-    }
-  }
-
-  /*
-    ×でカードを閉じていても、
-    次の授業カードや授業中カードに切り替わったら
-    再び表示する
-  */
-  const lesson = displayedClass.value;
-
-  const newClassCardKey = lesson
-    ? `${classCardType.value}-${currentDay}-${lesson.period}-${lesson.subject}`
-    : null;
-
-  if (newClassCardKey && newClassCardKey !== previousClassCardKey) {
-    showClassCard.value = true;
-  }
-
-  previousClassCardKey = newClassCardKey;
-
-  updateWalkingMinutes();
 };
 
-/* 選択していたピンの色を元に戻す */
-const restoreSelectedMarkerIcon = () => {
-  if (!selectedMarker) {
-    return;
-  }
-
-  const selectedBuildingName = selectedMarker.options.buildingName;
-
-  const destinationClass = displayedClass.value;
-
-  const isClassBuilding =
-    destinationClass && destinationClass.building === selectedBuildingName;
-
-  selectedMarker.setIcon(isClassBuilding ? redIcon : blueIcon);
-};
-
-/* 建物へ移動 */
+/* 検索した建物へ移動 */
 const moveToBuilding = (building) => {
-  if (!map) {
-    return;
-  }
-
   map.setView([building.lat, building.lng], 19);
 
-  restoreSelectedMarkerIcon();
+  if (selectedMarker) {
+    const selectedBuildingName = selectedMarker.options.buildingName;
+
+    const isCurrentClassBuilding =
+      currentClass.value &&
+      currentClass.value.building === selectedBuildingName;
+
+    selectedMarker.setIcon(isCurrentClassBuilding ? redIcon : blueIcon);
+  }
 
   const marker = buildingMarkers[building.name];
 
-  if (!marker) {
-    return;
-  }
+  if (!marker) return;
 
   marker.setIcon(redIcon);
-  marker.setPopupContent(createPopupContent(building));
   marker.openPopup();
 
   selectedMarker = marker;
   keyword.value = '';
 };
 
-/* 授業カードを押したとき */
-const openClassBuilding = () => {
-  if (!displayedBuilding.value) {
-    return;
-  }
-
-  moveToBuilding(displayedBuilding.value);
-};
-
-/* ×ボタン */
-const closeClassCard = () => {
-  showClassCard.value = false;
-};
-
-/* ポップアップの中身 */
-const createPopupContent = (building) => {
-  const lesson = displayedClass.value;
-
-  const isClassBuilding = lesson && lesson.building === building.name;
-
-  let lessonInformation = '';
-
-  if (isClassBuilding && currentClass.value) {
-    lessonInformation = `
-      現在の授業：${lesson.subject}<br>
-      教室：${lesson.room}<br>
-    `;
-  }
-
-  let distanceInformation = '';
-
-  if (userLocation.value && map) {
-    const distance = map.distance(userLocation.value, [
-      building.lat,
-      building.lng,
-    ]);
-
-    const walkMinutes = Math.max(1, Math.ceil(distance / 70));
-
-    distanceInformation = `
-      <br>
-      距離：${Math.round(distance)}m<br>
-      徒歩：約${walkMinutes}分
-    `;
-  }
-
-  return `
-    <div style="text-align:center;">
-      <strong>${building.name}</strong><br>
-
-      ${lessonInformation}
-
-      ${
-        building.photo
-          ? `
-            <img
-              src="${building.photo}"
-              alt="${building.name}"
-              style="
-                width:120px;
-                border-radius:8px;
-                margin-top:6px;
-              "
-            >
-          `
-          : ''
-      }
-
-      ${distanceInformation}
-    </div>
-  `;
-};
-
 onMounted(() => {
-  updateClassStatus();
+  currentClass.value = getCurrentClass();
 
-  /*
-    1分ごとに授業状況を更新
-  */
-  classCheckTimer = window.setInterval(() => {
-    updateClassStatus();
-  }, 60 * 1000);
+  if (currentClass.value) {
+    locationMessage.value = `現在、${currentClass.value.subject}の授業中です`;
+  }
 
   map = L.map('map', {
     minZoom: 15,
@@ -383,29 +165,86 @@ onMounted(() => {
     }
   ).addTo(map);
 
-  window.setTimeout(() => {
+  setTimeout(() => {
     map.invalidateSize();
   }, 300);
 
-  /*
-    建物ピンを作成
-  */
+  /* 建物ピン */
   buildings.forEach((building) => {
-    const destinationClass = displayedClass.value;
+    const isCurrentClassBuilding =
+      currentClass.value && currentClass.value.building === building.name;
 
-    const isClassBuilding =
-      destinationClass && destinationClass.building === building.name;
+    const popupBase = isCurrentClassBuilding
+      ? `
+          <strong>${building.name}</strong><br>
+          現在の授業：${currentClass.value.subject}<br>
+          教室：${currentClass.value.room}<br>
+        `
+      : `
+          <strong>${building.name}</strong><br>
+        `;
+
+    const popupWithPhoto = `
+      <div style="text-align:center;">
+        ${popupBase}
+
+        ${
+          building.photo
+            ? `
+              <img
+                src="${building.photo}"
+                style="
+                  width:120px;
+                  border-radius:8px;
+                  margin-top:6px;
+                "
+              >
+            `
+            : ''
+        }
+      </div>
+    `;
 
     const marker = L.marker([building.lat, building.lng], {
-      icon: isClassBuilding ? redIcon : blueIcon,
-
+      icon: isCurrentClassBuilding ? redIcon : blueIcon,
       buildingName: building.name,
     })
       .addTo(map)
-      .bindPopup(createPopupContent(building));
+      .bindPopup(popupWithPhoto);
 
     marker.on('click', () => {
-      marker.setPopupContent(createPopupContent(building));
+      if (!map._lastCenter) return;
+
+      const userLocation = map._lastCenter;
+
+      const distance = map.distance(userLocation, [building.lat, building.lng]);
+
+      const walkMinutes = Math.max(1, Math.ceil(distance / 70));
+
+      marker.setPopupContent(`
+        <div style="text-align:center;">
+          ${popupBase}
+
+          ${
+            building.photo
+              ? `
+                <img
+                  src="${building.photo}"
+                  style="
+                    width:120px;
+                    border-radius:8px;
+                    margin-top:6px;
+                  "
+                >
+              `
+              : ''
+          }
+
+          <br>
+          距離：${Math.round(distance)}m<br>
+          徒歩：約${walkMinutes}分
+        </div>
+      `);
     });
 
     marker.bindTooltip(building.name, {
@@ -417,136 +256,86 @@ onMounted(() => {
     buildingMarkers[building.name] = marker;
   });
 
-  /*
-    授業中または授業10分前なら
-    授業の建物へ自動ズーム
-  */
-  if (displayedBuilding.value) {
-    map.setView([displayedBuilding.value.lat, displayedBuilding.value.lng], 19);
+  /* 授業中なら、その建物へ自動ズーム */
+  if (currentClass.value) {
+    const currentBuilding = buildings.find(
+      (building) => building.name === currentClass.value.building
+    );
 
-    const marker = buildingMarkers[displayedBuilding.value.name];
+    if (currentBuilding) {
+      map.setView([currentBuilding.lat, currentBuilding.lng], 19);
 
-    if (marker) {
-      marker.setIcon(redIcon);
-      marker.setPopupContent(createPopupContent(displayedBuilding.value));
-      marker.openPopup();
+      const marker = buildingMarkers[currentBuilding.name];
 
-      selectedMarker = marker;
+      if (marker) {
+        marker.setIcon(redIcon);
+        marker.openPopup();
+      }
     }
   }
 
-  /*
-    現在地を取得
-  */
+  /* 現在地を取得 */
   map.locate({
     setView: false,
-
     enableHighAccuracy: true,
   });
 
   map.on('locationfound', (e) => {
-    userLocation.value = e.latlng;
+    map._lastCenter = e.latlng;
 
     const latitude = e.latlng.lat;
-
     const longitude = e.latlng.lng;
 
-    const insideCampus = isInsideCampus(
-      latitude,
-
-      longitude
-    );
-
-    /*
-
-      現在地は青丸
-
-    */
+    const insideCampus = isInsideCampus(latitude, longitude);
 
     L.circleMarker(e.latlng, {
       radius: 8,
-
       color: '#ffffff',
-
       fillColor: '#3388ff',
-
       fillOpacity: 1,
-
       weight: 3,
     })
-
       .addTo(map)
-
       .bindPopup('現在地');
-
-    /*
-
-      現在地の精度を示す円
-
-    */
 
     L.circle(e.latlng, {
       radius: e.accuracy,
-
       color: '#3388ff',
-
       fillOpacity: 0.08,
     }).addTo(map);
 
-    updateWalkingMinutes();
-
     /*
-
-      授業カードがない場合だけ
-
-      現在地へ移動
-
+      授業中は授業の建物を表示したままにする。
+      授業がない場合だけ現在地へ移動する。
     */
-
-    if (!displayedClass.value) {
+    if (!currentClass.value) {
       if (insideCampus) {
         locationMessage.value = '現在、校内にいます';
-
         map.setView(e.latlng, 18);
       } else {
         locationMessage.value = '現在、校舎外です';
-
         map.setView(campusCenter, 16);
       }
     }
   });
 
   map.on('locationerror', (e) => {
-    if (!displayedClass.value) {
+    if (!currentClass.value) {
       locationMessage.value = '現在地を取得できませんでした';
 
       map.setView(campusCenter, 16);
     }
 
-    console.log(
-      '現在地取得失敗:',
-
-      e.message
-    );
+    console.log('現在地取得失敗:', e.message);
   });
 
   L.control.scale().addTo(map);
-});
-
-onUnmounted(() => {
-  if (classCheckTimer) {
-    window.clearInterval(classCheckTimer);
-  }
-
-  if (map) {
-    map.remove();
-  }
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <!-- ヘッダー -->
+    <!-- 上部ヘッダー -->
     <header class="app-header">
       <h1 class="app-title">
         <span class="app-logo">✤</span>
@@ -554,6 +343,7 @@ onUnmounted(() => {
       </h1>
     </header>
 
+    <!-- 検索欄 -->
     <!-- 検索欄 -->
     <div class="search-area">
       <div class="search-box">
@@ -584,80 +374,18 @@ onUnmounted(() => {
       </router-link>
     </div>
 
+    <!-- 地図 -->
     <main class="map-area">
-      <!-- 授業カード -->
-      <div
-        v-if="classCardType && displayedClass && showClassCard"
-        class="class-card"
-        role="button"
-        tabindex="0"
-        @click="openClassBuilding"
-        @keydown.enter="openClassBuilding"
-      >
-        <button class="class-card-close" @click.stop="closeClassCard">×</button>
-
-        <!-- 次の授業 -->
-        <template v-if="classCardType === 'next'">
-          <div class="class-card-title">📚 次の授業</div>
-
-          <div class="class-card-period">
-            {{ displayedClass.period }}限 （{{ displayedClass.start }}〜{{
-              displayedClass.end
-            }}）
-          </div>
-
-          <div class="class-card-subject">
-            {{ displayedClass.subject }}
-          </div>
-
-          <div class="class-card-room">
-            {{ displayedClass.building }}
-            {{ displayedClass.room }}
-          </div>
-
-          <div class="class-card-info">
-            🕒 あと{{ minutesUntilClass }}分で開始
-          </div>
-
-          <div v-if="walkingMinutes" class="class-card-info">
-            🚶 徒歩{{ walkingMinutes }}分
-          </div>
-        </template>
-
-        <!-- 授業中 -->
-        <template v-else>
-          <div class="class-card-title">🟢 授業中</div>
-
-          <div class="class-card-message">
-            現在、
-
-            {{ displayedClass.building }}
-            {{ displayedClass.room }}
-
-            <br />
-
-            「{{ displayedClass.subject }}」 の授業中
-          </div>
-
-          <div v-if="walkingMinutes" class="class-card-info">
-            🚶 徒歩{{ walkingMinutes }}分
-          </div>
-        </template>
-
-        <div class="class-card-hint">📍 タップして地図で確認</div>
-      </div>
-
-      <!-- 授業がない時 -->
-      <div v-else class="location-status">
-        <span class="location-pin"> ● </span>
+      <div class="location-status">
+        <span class="location-pin" :class="{ 'class-active': currentClass }">
+          ●
+        </span>
 
         {{ locationMessage }}
       </div>
 
-      <!-- 地図 -->
       <div id="map"></div>
 
-      <!-- 工事情報 -->
       <a
         href="https://doshisha-vision2025.jp/anniversary/kyotanabe/schedule/"
         target="_blank"
@@ -665,152 +393,12 @@ onUnmounted(() => {
         class="construction-button"
       >
         🚧 工事情報
-        <span>↑</span>
+        <span>↗</span>
       </a>
     </main>
   </div>
 </template>
 
 <style>
-/* ===== 授業カード ===== */
-
-.class-card {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-
-  width: min(320px, calc(100% - 90px));
-
-  padding: 18px 18px 16px;
-
-  background: rgba(248, 244, 255, 0.97);
-
-  border: 1px solid #dcc7ff;
-
-  border-radius: 18px;
-
-  box-shadow: 0 8px 22px rgba(73, 44, 128, 0.12);
-
-  z-index: 1000;
-
-  cursor: pointer;
-
-  transition: 0.18s;
-}
-
-.class-card:hover {
-  transform: translateY(-2px);
-}
-
-.class-card:active {
-  transform: scale(0.985);
-}
-
-.class-card-close {
-  position: absolute;
-
-  top: 10px;
-
-  right: 12px;
-
-  width: 28px;
-
-  height: 28px;
-
-  border: none;
-
-  background: transparent;
-
-  font-size: 22px;
-
-  color: #8461c9;
-
-  cursor: pointer;
-}
-
-.class-card-close:hover {
-  color: #5f37b4;
-}
-
-.class-card-title {
-  margin-bottom: 12px;
-
-  font-size: 17px;
-
-  font-weight: 700;
-
-  color: #6d43bd;
-}
-
-.class-card-period {
-  margin-bottom: 10px;
-
-  font-size: 14px;
-
-  color: #666;
-}
-
-.class-card-subject {
-  font-size: 21px;
-
-  font-weight: bold;
-
-  color: #2d2d2d;
-}
-
-.class-card-room {
-  margin-top: 4px;
-
-  margin-bottom: 12px;
-
-  font-size: 15px;
-
-  color: #555;
-}
-
-.class-card-message {
-  margin-bottom: 14px;
-
-  line-height: 1.7;
-
-  font-size: 15px;
-}
-
-.class-card-info {
-  margin-top: 6px;
-
-  font-size: 14px;
-
-  font-weight: 600;
-
-  color: #5a5a5a;
-}
-
-.class-card-hint {
-  margin-top: 14px;
-
-  padding-top: 10px;
-
-  border-top: 1px solid #ece4ff;
-
-  font-size: 12px;
-
-  color: #9073cb;
-}
-
-/* ===== モバイル ===== */
-
-@media (max-width: 768px) {
-  .class-card {
-    width: calc(100% - 90px);
-
-    left: 15px;
-
-    top: 15px;
-  }
-
-  .class-card-subject {
-    font-size: 19px;
-  }
-}
+/* ここには今使っているCSSをそのまま残してOK */
 </style>
