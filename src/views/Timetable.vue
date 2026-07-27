@@ -187,12 +187,12 @@ const clearTimetable = () => {
                 :key="period"
                 @click="openForm(day, period)"
               >
-                <div v-if="getClass(day, period)" class="class-card">
+                <div v-if="getClass(day, period)" class="timetable-class-card">
                   <strong class="subject-name">
                     {{ getClass(day, period).subject }}
                   </strong>
 
-                  <span class="class-info">
+                  <span class="class-info building-name">
                     {{ getClass(day, period).building }}
                   </span>
 
@@ -207,7 +207,6 @@ const clearTimetable = () => {
                     削除
                   </button>
                 </div>
-
                 <div v-else class="empty-cell">
                   <span class="plus">＋</span>
                   <span class="add-text">授業を追加</span>
@@ -503,7 +502,7 @@ td:hover .add-text {
   opacity: 1;
 }
 
-.class-card {
+.timetable-classcard {
   display: flex;
 
   flex-direction: column;
@@ -533,11 +532,13 @@ td:hover .add-text {
 }
 
 .subject-name {
+  display: block;
+  width: 100%;
   color: #55347b;
-
-  font-size: 14px;
-
+  font-size: 19px;
   line-height: 1.4;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .class-info {

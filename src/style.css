@@ -406,3 +406,14 @@ body {
 .construction-button:active {
   transform: scale(0.96);
 }
+
+.distance-page {
+  padding: 20px;
+  font-family: "Meiryo";
+}
+
+button {
+  margin-right: 10px;
+}
+
+
